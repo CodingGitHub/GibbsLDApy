@@ -36,6 +36,8 @@ class Strtokenizer(object):
                     while re.search(pattern,string).span() == (0,1) :
                         index += 2
                         string = str[index:]
+                        if string == '':
+                            return 0
                 start = index
         else:
             start = 0

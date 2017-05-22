@@ -21,6 +21,7 @@ from Utils import *
 from DataSet import *
 import random
 import numpy as np
+from TPTM import *
 
 
 '''后来发现要声明一个二维数组很简单,b = [[0]*10]*10 ...'''
@@ -52,6 +53,7 @@ class Model(object):
     V = None  # vocabulary size
     K = None  # number of topics
     alpha = None  # LDA hyperparameters
+    alpha_c = None # LDA hyperparameters for comments
     beta = None
     niters = None  # number of Gibbs sampling iterations
     liter = None  # the iteration at which the model was saved
@@ -79,6 +81,10 @@ class Model(object):
     newndsum = []
     newtheta = []
     newphi = []
+
+    # TPTM parameters
+    ut = None
+    split_num = 0
 
     # --------------------------------------
 
@@ -141,6 +147,9 @@ class Model(object):
 
     # @tested
     def init(self, argc, argv):
+
+        self.ut = Utils()
+        self.ut.process_source('data/1007373.xml',10)
         # call parse_args
         if self.parse_args(argc, argv):
             return 1
@@ -159,6 +168,7 @@ class Model(object):
     # @tested
     # 从头开始分析,初始化模型
     def init_est(self):
+
         self.p = []  # double[K]
         for k in range(self.K):
             self.p.append(0)
@@ -748,9 +758,26 @@ class Model(object):
 
         print("Sampling ",self.niters," iterations!\n")
 
+        # 申请 TPTM
+        self.tp = TPTM(10,self.K,100,10000,self.nw,self.ut) # 这里设置默认参数，后期封装到外层
+        self.tp.preprocessing()
+        self.alpha_c = self.tp.Get_alpha_c()
+        self.liter = self.tp.iteration
+
         last_iter = self.liter
         for self.liter in range(last_iter+1,self.niters+last_iter) :
             print("Iteration ",self.liter," ...\n")
+
+            if self.liter != 0 and (self.liter%2)!=0: # 奇数更新 lambda 值
+                self.tp.update_lambda_s(self.liter)
+                self.alpha_c = self.tp.Get_alpha_c()
+            elif self.liter != 0 and (self.liter%2)==0: # 偶数更新 x_u_c_t 值
+                self.tp.update_x_u_c_t(self.liter)
+                self.alpha_c = self.tp.Get_alpha_c()
+            elif self.liter != 0 and self.liter%50 == 0:
+                self.tp.update_Mpre_c(self.liter)
+                self.tp.update_Mpre_s(self.liter)
+                self.alpha_c = self.tp.Get_alpha_c()
 
             # for all z_i
             for m in range(self.M) :
@@ -788,11 +815,13 @@ class Model(object):
         self.ndsum[m] -= 1
 
         Vbeta = self.V * self.beta
-        Kalpha = self.K * self.alpha
+        Kalpha = 0
+        for k in range(self.K):
+            Kalpha += self.alpha_c[m][k]
 
         # do multinomial sampling via cumulative method
         for k in range(self.K) :
-            self.p[k] = (self.nw[w][k] + self.beta) / (self.nwsum[k] + Vbeta) * (self.nd[m][k] + self.alpha) / (self.ndsum[m] + Kalpha)
+            self.p[k] = (self.nw[w][k] + self.beta) / (self.nwsum[k] + Vbeta) * (self.nd[m][k] + self.alpha_c[m][k]) / (self.ndsum[m] + Kalpha)
 
         # cumulate multinomial parameters
         for k in range(self.K) :

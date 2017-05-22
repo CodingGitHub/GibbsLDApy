@@ -11,10 +11,21 @@
 '''
 
 import Constants
-import re
+import pandas as pd
 from Strtokenizer import *
+import jieba
 
 class Utils(object):
+
+    # 下面这几个变量都是给TPTM准备的
+    user = {}
+    comments = []
+    user_num = 0
+    comments_num = 0
+    shots = None
+    com = None
+    stopwords = None
+    split_num = 0
 
     # @tested
     def __init__(self):
@@ -258,3 +269,164 @@ class Utils(object):
         if right > pivotidx :
             self.quicksort(vect,pivotidx+1,right)
         return 0
+
+
+
+    # @tested
+    '''
+    Api_name : CountKey
+    Argc :  filename (读取文件名)
+            resultName (输出文件名)
+    Func :  对输入文件统计里面所有单词词频
+    '''
+    # 读取弹幕信息并且分割
+    # encoding: utf-8
+
+    # 统计关键词及个数 （根据文件）
+    def CountKey(self, fileName, resultName):
+        try:
+            # 计算文件行数
+            lineNums = len(open(fileName, 'rU').readlines())
+            # print u'文件行数: ' + str(lineNums)
+
+            # 统计格式 格式<Key:Value> <属性:出现个数>
+            i = 0
+            table = {}
+            source = open(fileName, "r")
+            result = open(resultName, "w")
+
+            while i < lineNums:
+                line = source.readline()
+                line = line.rstrip()
+                # print line
+
+                words = line.split(" ")  # 空格分隔
+                # print str(words).decode('string_escape') #list显示中文
+
+                # 字典插入与赋值
+                for word in words:
+                    if word != "" and table.has_key(word):  # 如果存在次数加1
+                        num = table[word]
+                        table[word] = num + 1
+                    elif word != "":  # 否则初值为1
+                        table[word] = 1
+                i = i + 1
+
+            # 键值从大到小排序 函数原型：sorted(dic,value,reverse)
+            dic = sorted(table.iteritems(), key=lambda asd: asd[1], reverse=True)
+            word_fre = pd.DataFrame(dic)
+            for i in range(len(dic)):
+                # print 'key=%s, value=%s' % (dic[i][0],dic[i][1])
+                result.write("<" + dic[i][0] + ":" + str(dic[i][1]) + ">\n")
+            return word_fre
+
+        except Exception as e:
+            print('Error:'+str(e))
+        finally:
+            source.close()
+            result.close()
+            # print 'END\n\n'
+
+    # @tested
+    '''
+    Api_name : cut_word
+    Argc : line (文件中的一行)
+    Func : 对 line 进行分词
+    '''
+    def cut_word(self,line):
+        words = jieba.cut(line, cut_all=False)
+        final = []
+        # 不能去停用词，否则会很难处理
+        for word in words:
+            final.append(word)
+        return final
+
+
+    # @tested
+    '''
+    Api_name : mktrncdocs
+    Argc : None
+    Func : 利用 shots 生成一个符合原始LDA需求的输入文档格式
+    '''
+    def mktrncdocs(self):
+        # 生成 trndocs.dat 文件
+        # 该文件就是视频的剪切 -----> 分成了 split_num 份数，每一份代表一篇文档
+        f = open('test_data/trndocs.dat','w')
+        f.write(str(self.comments_num)+'\n')
+        for i in range(self.split_num):
+            for j in range(len(self.shots[i])):
+                for k in range(len(self.shots[i][j])):
+                    f.write(self.shots[i][j][k].encode('utf-8')+' ')
+                f.write('\n')
+
+
+    '''
+    用来读取源弹幕文件，生成新的数据，并且生成符合LDA的训练数据
+    data:
+            user : dict
+            comments : list
+            user_num : number
+            comments_num : number
+            shots : list
+            com : list
+            stopwords : dict
+    '''
+    def process_source(self,danmu_dir,split_num):
+
+        self.split_num = split_num
+        # 数据和停用词
+        danmu = open(danmu_dir)
+
+        # stopwords 读取
+        self.stopwords = {}.fromkeys([line.rstrip().decode('utf-8') for line in open('data/stopwords.txt')])
+
+        # 读取文件，分析后存储到 user 和 comments
+        for line in danmu.readlines()[:-1]:
+            start = line.find('p=')
+            stop = line.find('">')
+            sub1 = line[start + 3:stop]
+            t = sub1.split(',')[0]
+            sub1 = sub1.split(',')[6]
+            start = line.find('">')
+            stop = line.find('</d>')
+            sub2 = line[start + 2:stop].decode('utf-8')
+            self.comments.append((float(t), sub2))
+            temp = []
+            if not self.user.has_key(sub1):
+                temp.append(sub2)
+                self.user[str(sub1)] = temp
+            else:
+                self.user[str(sub1)].append(sub2)
+
+        # 统计user的个数 , 现在统计的是这个文档里的user，后期要做成对所有文档的统计量，还要能支持增量
+        self.user_num = len(self.user)
+
+        # comments的数量
+        self.comments_num = len(self.comments)
+
+        # 排序，分割comments ---> shots
+        self.comments = sorted(self.comments)
+        spli = (self.comments[-1][0] - self.comments[0][0]) / self.split_num
+        self.shots = []
+        for i in range(10):
+            self.shots.append([x[1] for x in self.comments if x[0] > i * spli and x[0] <= (i + 1) * spli])
+        self.shots[0].insert(0,self.comments[0][1])
+
+        self.com = self.shots[:]  # 复制 shots ,因为后面会对shots处理，而后面还需要这个shots原来的数据
+
+        for i in range(self.split_num):
+            self.shots[i] = map(self.cut_word, self.shots[i])
+
+
+        self.mktrncdocs()
+
+        # 生成每个片段所有单词的文档，并且统计词频
+        f = open('data/comments.txt', 'w')
+        for i in range(self.split_num):
+            for x in self.shots[i]:
+                for word in x:
+                    f.write(word.encode('utf-8') + ' ')
+            f.write('\n')
+
+        self.word_fre = self.CountKey('data/comments.txt', 'data/comments_map')
+
